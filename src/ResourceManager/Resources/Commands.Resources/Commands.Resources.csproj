@@ -70,7 +70,7 @@
     </Reference>
     <Reference Include="Microsoft.Azure.Management.Authorization, Version=0.9.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\..\packages\Microsoft.Azure.Management.Authorization.0.19.2-preview\lib\net40\Microsoft.Azure.Management.Authorization.dll</HintPath>
+      <HintPath>..\..\..\packages\Microsoft.Azure.Management.Authorization.0.19.3-preview\lib\net40\Microsoft.Azure.Management.Authorization.dll</HintPath>
     </Reference>
     <Reference Include="Microsoft.Azure.ResourceManager, Version=2.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
@@ -141,6 +141,7 @@
     <Compile Include="ActiveDirectory\NewAzureADApplicationCommand.cs" />
     <Compile Include="ActiveDirectory\RemoveAzureADServicePrincipalCommand.cs" />
     <Compile Include="ActiveDirectory\NewAzureADServicePrincipalCommand.cs" />
+    <Compile Include="Models.Authorization\PSAccessAssignment.cs" />
     <Compile Include="Models.ResourceGroups\PSResourceProviderOperation.cs" />
     <Compile Include="Properties\Resources.Designer.cs">
       <AutoGen>True</AutoGen>
@@ -205,6 +206,7 @@
     <Compile Include="ResourceGroups\GetAzureResourceGroupLogCommand.cs" />
     <Compile Include="ResourceGroups\GetAzureLocationCommand.cs" />
     <Compile Include="ResourceGroups\SetAzureResourceGroupCommand.cs" />
+    <Compile Include="RoleAssignments\GetAzureAccessAssignmentsCommand.cs" />
     <Compile Include="RoleAssignments\RemoveAzureRoleAssignmentCommand.cs" />
     <Compile Include="RoleAssignments\GetAzureRoleAssignmentCommand.cs" />
     <Compile Include="RoleAssignments\NewAzureRoleAssignmentCommand.cs" />

@@ -190,6 +190,63 @@ namespace Microsoft.Azure.Commands.Resources.Models.Authorization
             return roleAssignment;
         }
 
+        /// <summary>
+        /// Deletes a role assignments based on the used options.
+        /// </summary>
+        /// <param name="principalDisplayNameOrUpnOrEmail">The role assignment filtering options</param>
+        /// <param name="currentSubscriptionName">The current subscription name</param>
+        /// <returns>The deleted role assignments</returns>
+        public List<PSAccessAssignment> GetAccessAssignments(string principalDisplayNameOrUpnOrEmail, string currentSubscriptionName)
+        {
+            string currentSubscriptionId = AuthorizationManagementClient.Credentials.SubscriptionId;
+
+            // Get all access-assignments for subscription
+            ListAssignmentsFilterParameters parameters = new ListAssignmentsFilterParameters();
+            List<PSRoleAssignment> roleAssignmentsForSubscription = AuthorizationManagementClient.RoleAssignments.List(parameters)
+                .RoleAssignments.Select(r => r.ToPSRoleAssignment(this, ActiveDirectoryClient)).ToList();
+            List<PSAccessAssignment> accessAssignmentsForSubscription = roleAssignmentsForSubscription.Select(ra => ra.ToPsAccessAssignment(this, ActiveDirectoryClient, currentSubscriptionName)).ToList();
+            
+            // Get classic administrator access assignments
+            List<ClassicAdministrator> classicAdministrators = AuthorizationManagementClient.ClassicAdministrators.List().ClassicAdministrators.ToList();
+            List<PSAccessAssignment> classicAdministratorsAccessAssignments = classicAdministrators.Select(a => a.ToPsAccessAssignment(ActiveDirectoryClient, currentSubscriptionName, currentSubscriptionId)).ToList();
+
+            // concat both sets
+            accessAssignmentsForSubscription.AddRange(classicAdministratorsAccessAssignments);
+
+            // Filter
+            if (!string.IsNullOrWhiteSpace(principalDisplayNameOrUpnOrEmail))
+            {
+                PSADObject principal = ActiveDirectoryClient.GetADObject(new ADObjectFilterOptions
+                {
+                    UPN = principalDisplayNameOrUpnOrEmail,
+                    SPN = principalDisplayNameOrUpnOrEmail,
+                    Mail = principalDisplayNameOrUpnOrEmail
+                });
+ 
+                List<Guid> principalObjectIdAndGroupObjectIds = new List<Guid>();
+                
+                // Add the current principal id to the list
+                principalObjectIdAndGroupObjectIds.Add(principal.Id);
+
+                // Get transitive-group membership of the principal
+                List<PSADObject> principalGroupMembership = new List<PSADObject>();
+
+                if (principal is PSADUser)
+                {
+                    principalGroupMembership.AddRange(ActiveDirectoryClient.ListUserGroups(((PSADUser) principal).UserPrincipalName));
+                }
+                else if (principal is PSADGroup)
+                {
+                    principalGroupMembership.AddRange(ActiveDirectoryClient.ListGroupsForGroupPrincipal(((PSADGroup) principal).Mail));
+                }
+                //TODO: For service principals
+
+                principalObjectIdAndGroupObjectIds.AddRange(principalGroupMembership.Select(g => g.Id));
+            }
+
+            return accessAssignmentsForSubscription;
+        }
+
         public PSRoleDefinition GetRoleRoleDefinition(string name)
         {
             PSRoleDefinition role = FilterRoleDefinitions(name).FirstOrDefault();

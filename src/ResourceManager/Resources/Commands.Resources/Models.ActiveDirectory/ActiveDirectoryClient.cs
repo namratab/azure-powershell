@@ -225,6 +225,18 @@ namespace Microsoft.Azure.Commands.Resources.Models.ActiveDirectory
             return result;
         }
 
+        public List<PSADObject> ListGroupsForGroupPrincipal(string groupPrincipal)
+        {
+            List<PSADObject> result = new List<PSADObject>();
+            Guid objectId = GetObjectId(new ADObjectFilterOptions { Mail = groupPrincipal });
+         //   PSADObject group = GetADObject(new ADObjectFilterOptions { Id = objectId.ToString() });
+            var groupsIds = GraphClient.Group.GetMemberGroups(new GroupGetMemberGroupsParameters() { ObjectId = objectId.ToString() }).ObjectIds;
+            var groupsResult = GraphClient.Objects.GetObjectsByObjectIds(new GetObjectsParameters { Ids = groupsIds });
+            result.AddRange(groupsResult.AADObject.Select(g => g.ToPSADGroup()));
+
+            return result;
+        }
+
         public List<PSADGroup> FilterGroups(ADObjectFilterOptions options)
         {
             List<PSADGroup> groups = new List<PSADGroup>();

@@ -12,10 +12,12 @@
 // limitations under the License.
 // ----------------------------------------------------------------------------------
 
+using System;
 using Microsoft.Azure.Commands.Resources.Models.ActiveDirectory;
 using Microsoft.Azure.Management.Authorization.Models;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Azure.Common.Authentication.Models;
 
 namespace Microsoft.Azure.Commands.Resources.Models.Authorization
 {
@@ -105,6 +107,97 @@ namespace Microsoft.Azure.Commands.Resources.Models.Authorization
                     ObjectId = adObject.Id
                 };
             }
+        }
+
+        public static PSAccessAssignment ToPsAccessAssignment(this PSRoleAssignment psRoleAssignment, AuthorizationClient policyClient, ActiveDirectoryClient activeDirectoryClient, string currentSubscriptionName)
+        {
+            PSRoleDefinition roleDefinition = policyClient.GetRoleRoleDefinition(psRoleAssignment.RoleDefinitionName);
+            PSADObject subject =
+                activeDirectoryClient.GetADObject(new ADObjectFilterOptions {Id = psRoleAssignment.ObjectId.ToString()}) ??
+                new PSADObject() {Id = psRoleAssignment.ObjectId};
+
+            ScopeDetails scopeDetails = GetScopeDetails(psRoleAssignment.Scope, currentSubscriptionName);
+            PSAccessAssignment psAccessAssignment = new PSAccessAssignment()
+            {
+                RoleDefinitionId = roleDefinition == null ? null : roleDefinition.Id,
+                RoleDefinitionName = psRoleAssignment.RoleDefinitionName,
+                Scope = psRoleAssignment.Scope,
+                ScopeType = scopeDetails.ScopeType,
+                ScopeName = scopeDetails.ScopeName,
+                SubjectId = subject.Id.ToString()
+            };
+
+            if (subject is PSADUser)
+            {
+                psAccessAssignment.SubjectName = ((PSADUser) subject).UserPrincipalName;
+                psAccessAssignment.SubjectType = "User";
+            }
+            else if (subject is PSADGroup)
+            {
+                psAccessAssignment.SubjectName = ((PSADGroup)subject).Mail;
+                psAccessAssignment.SubjectType = "Group";
+            }
+            else if (subject is PSADServicePrincipal)
+            {
+                psAccessAssignment.SubjectName = ((PSADServicePrincipal)subject).ServicePrincipalName;
+                psAccessAssignment.SubjectType = "Service Principal";
+            }
+            else
+            {
+                psAccessAssignment.SubjectName = subject.DisplayName;
+                psAccessAssignment.SubjectType = null;
+            }
+
+            return psAccessAssignment;
+        }
+
+        public static PSAccessAssignment ToPsAccessAssignment(this ClassicAdministrator classicAdministrator, ActiveDirectoryClient activeDirectoryClient, string currentSubscriptionName, string currentSubscriptionId)
+        {
+            return new PSAccessAssignment()
+            {
+                RoleDefinitionId = null,
+                RoleDefinitionName = classicAdministrator.Properties.Role,
+                Scope = "/subscriptions/" + currentSubscriptionId,
+                ScopeType = "Subscription",
+                ScopeName = currentSubscriptionName,
+                SubjectId = null,
+                SubjectName = classicAdministrator.Properties.EmailAddress,
+                SubjectType = "User"
+            };
+        }
+
+        private static ScopeDetails GetScopeDetails(string scope, string currentSubscriptionName)
+        {
+            string[] scopeParts = scope.Split(new[] {'/'}, StringSplitOptions.RemoveEmptyEntries);
+            string scopeLowerCase = scope.ToLower();
+            string scopeName = scopeParts[scopeParts.Length - 1];
+
+            ScopeDetails scopeDetails = new ScopeDetails();
+
+            if (scopeLowerCase.Contains("subscriptions") && scopeParts.Length <= 2)
+            {
+                scopeDetails.ScopeName = currentSubscriptionName;
+                scopeDetails.ScopeType = "Subscription";
+            }
+            else if (scopeLowerCase.Contains("resourcegroups") && scopeParts.Length <= 4)
+            {
+                scopeDetails.ScopeName = scopeName;
+                scopeDetails.ScopeType = "Resource group";
+            }
+            else if (scopeLowerCase.Contains("providers") && scopeParts.Length > 5)
+            {
+                scopeDetails.ScopeName = scopeName;
+                scopeDetails.ScopeType = "Resource";
+            }
+
+            return scopeDetails;
+        }
+
+        private class ScopeDetails
+        {
+            public string ScopeName { get; set; }
+
+            public string ScopeType { get; set; }
         }
     }
 }
