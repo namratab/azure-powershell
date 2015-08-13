@@ -17,7 +17,6 @@ using Microsoft.Azure.Commands.Resources.Models.ActiveDirectory;
 using Microsoft.Azure.Management.Authorization.Models;
 using System.Collections.Generic;
 using System.Linq;
-using Microsoft.Azure.Common.Authentication.Models;
 
 namespace Microsoft.Azure.Commands.Resources.Models.Authorization
 {
@@ -109,19 +108,24 @@ namespace Microsoft.Azure.Commands.Resources.Models.Authorization
             }
         }
 
-        public static PSAccessAssignment ToPsAccessAssignment(this PSRoleAssignment psRoleAssignment, AuthorizationClient policyClient, ActiveDirectoryClient activeDirectoryClient, string currentSubscriptionName)
+        public static PSAccessAssignment ToPsAccessAssignment(this RoleAssignment roleAssignment, List<RoleDefinition> allRoleDefinitions, List<PSADObject> allPrincipalObjectsInRoleAssignments, string currentSubscriptionName)
         {
-            PSRoleDefinition roleDefinition = policyClient.GetRoleRoleDefinition(psRoleAssignment.RoleDefinitionName);
-            PSADObject subject =
-                activeDirectoryClient.GetADObject(new ADObjectFilterOptions {Id = psRoleAssignment.ObjectId.ToString()}) ??
-                new PSADObject() {Id = psRoleAssignment.ObjectId};
+            // Get the Guid portion of the role definition id from the RoleAssignment
+            string[] roleIdParts = roleAssignment.Properties.RoleDefinitionId.Split('/');
+            Guid roleDefinitionId = Guid.Parse(roleIdParts.Last());
 
-            ScopeDetails scopeDetails = GetScopeDetails(psRoleAssignment.Scope, currentSubscriptionName);
+            // Resolve the roledefinition and Principal from the pre-fetched list 
+            RoleDefinition roleDefinition = allRoleDefinitions.FirstOrDefault(rd => rd.Name.Equals(roleDefinitionId));
+            PSADObject subject = allPrincipalObjectsInRoleAssignments.FirstOrDefault(principal => principal.Id.ToString().Equals(roleAssignment.Properties.PrincipalId.ToString())) ??
+                new PSADObject() {Id = roleAssignment.Properties.PrincipalId};
+
+            ScopeDetails scopeDetails = GetScopeDetails(roleAssignment.Properties.Scope, currentSubscriptionName);
+
             PSAccessAssignment psAccessAssignment = new PSAccessAssignment()
             {
                 RoleDefinitionId = roleDefinition == null ? null : roleDefinition.Id,
-                RoleDefinitionName = psRoleAssignment.RoleDefinitionName,
-                Scope = psRoleAssignment.Scope,
+                RoleDefinitionName = roleDefinition == null ? null : roleDefinition.Properties.RoleName,
+                Scope = roleAssignment.Properties.Scope,
                 ScopeType = scopeDetails.ScopeType,
                 ScopeName = scopeDetails.ScopeName,
                 SubjectId = subject.Id.ToString()
@@ -129,18 +133,18 @@ namespace Microsoft.Azure.Commands.Resources.Models.Authorization
 
             if (subject is PSADUser)
             {
-                psAccessAssignment.SubjectName = ((PSADUser) subject).UserPrincipalName;
-                psAccessAssignment.SubjectType = "User";
+                psAccessAssignment.SubjectName = ((PSADUser)subject).UserPrincipalName;
+                psAccessAssignment.SubjectType = PrincipalType.User.ToString();
             }
             else if (subject is PSADGroup)
             {
-                psAccessAssignment.SubjectName = ((PSADGroup)subject).Mail;
-                psAccessAssignment.SubjectType = "Group";
+                psAccessAssignment.SubjectName = ((PSADGroup)subject).DisplayName;
+                psAccessAssignment.SubjectType = PrincipalType.Group.ToString();
             }
             else if (subject is PSADServicePrincipal)
             {
                 psAccessAssignment.SubjectName = ((PSADServicePrincipal)subject).ServicePrincipalName;
-                psAccessAssignment.SubjectType = "Service Principal";
+                psAccessAssignment.SubjectType = PrincipalType.ServicePrincipal.ToString();
             }
             else
             {
@@ -150,6 +154,7 @@ namespace Microsoft.Azure.Commands.Resources.Models.Authorization
 
             return psAccessAssignment;
         }
+
 
         public static PSAccessAssignment ToPsAccessAssignment(this ClassicAdministrator classicAdministrator, ActiveDirectoryClient activeDirectoryClient, string currentSubscriptionName, string currentSubscriptionId)
         {

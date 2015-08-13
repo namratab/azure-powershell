@@ -20,10 +20,19 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using Microsoft.WindowsAzure.Commands.ServiceManagement.Model;
 using ProjectResources = Microsoft.Azure.Commands.Resources.Properties.Resources;
 
 namespace Microsoft.Azure.Commands.Resources.Models.ActiveDirectory
 {
+    public enum PrincipalType
+    {
+        None,
+        User,
+        Group,
+        ServicePrincipal
+    }
+
     public class ActiveDirectoryClient
     {
         public GraphRbacManagementClient GraphClient { get; private set; }
@@ -225,16 +234,54 @@ namespace Microsoft.Azure.Commands.Resources.Models.ActiveDirectory
             return result;
         }
 
-        public List<PSADObject> ListGroupsForGroupPrincipal(string groupPrincipal)
+        public List<string> ListSecurityGroupsIdsForUserPrincipal(Guid userPrincipalId)
         {
-            List<PSADObject> result = new List<PSADObject>();
-            Guid objectId = GetObjectId(new ADObjectFilterOptions { Mail = groupPrincipal });
-         //   PSADObject group = GetADObject(new ADObjectFilterOptions { Id = objectId.ToString() });
-            var groupsIds = GraphClient.Group.GetMemberGroups(new GroupGetMemberGroupsParameters() { ObjectId = objectId.ToString() }).ObjectIds;
-            var groupsResult = GraphClient.Objects.GetObjectsByObjectIds(new GetObjectsParameters { Ids = groupsIds });
-            result.AddRange(groupsResult.AADObject.Select(g => g.ToPSADGroup()));
+            List<string> result = new List<string>();
+            IList<string> groupIds = GraphClient.User.GetMemberGroups(new UserGetMemberGroupsParameters { ObjectId = userPrincipalId.ToString() }).ObjectIds;
+
+            if (groupIds.Any())
+            {
+                // Resolve groupsIds to group objects by querying Graph
+                var groupsResult = GraphClient.Objects.GetObjectsByObjectIds(new GetObjectsParameters {Ids = groupIds, Types = new List<string>() { PrincipalType.Group.ToString() }});
+                result.AddRange(groupsResult.AADObject.Where(g => g.SecurityEnabled == true).Select(s => s.ObjectId).ToList());
+            }
 
             return result;
+        }
+
+        public List<string> ListSecurityGroupIdsForGroupPrincipal(Guid groupPrincipalId)
+        {
+            List<string> result = new List<string>();
+            IList<string> groupIds = GraphClient.Group.GetMemberGroups(new GroupGetMemberGroupsParameters() { ObjectId = groupPrincipalId.ToString() }).ObjectIds;
+
+            if (groupIds.Any())
+            {
+                // Resolve groupsIds to group objects by querying Graph
+                var groupsResult = GraphClient.Objects.GetObjectsByObjectIds(new GetObjectsParameters { Ids = groupIds, Types = new List<string>() { PrincipalType.Group.ToString() } });
+                result.AddRange(groupsResult.AADObject.Where(g => g.SecurityEnabled == true).Select(s => s.ObjectId).ToList());
+            }
+
+            return result;
+        }
+
+        public List<string> ListSecurityGroupIdsForServicePrincipal(Guid servicePrincipalId)
+        {
+            List<string> result = new List<string>();
+            IList<string> groupIds = GraphClient.ServicePrincipal.GetMemberGroups(new ServicePrincipalGetMemberGroupsParameters() { ObjectId = servicePrincipalId.ToString() }).ObjectIds;
+
+            if (groupIds.Any())
+            {
+                // Resolve groupsIds to group objects by querying Graph
+                var groupsResult = GraphClient.Objects.GetObjectsByObjectIds(new GetObjectsParameters { Ids = groupIds, Types = new List<string>() { PrincipalType.Group.ToString() } });
+                result.AddRange(groupsResult.AADObject.Where(g => g.SecurityEnabled == true).Select(s => s.ObjectId).ToList());
+            }
+
+            return result;
+        }
+
+        public List<PSADObject> GetObjectsByObjectIds(IList<string> ids, IList<string> types)
+        {
+            return GraphClient.Objects.GetObjectsByObjectIds(new GetObjectsParameters() { Ids = ids, Types = types }).AADObject.Select(obj => obj.ToPSADObject()).ToList();
         }
 
         public List<PSADGroup> FilterGroups(ADObjectFilterOptions options)

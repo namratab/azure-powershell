@@ -15,25 +15,52 @@
 using Microsoft.Azure.Commands.Resources.Models;
 using Microsoft.Azure.Commands.Resources.Models.ActiveDirectory;
 using Microsoft.Azure.Commands.Resources.Models.Authorization;
-using System;
 using System.Collections.Generic;
 using System.Management.Automation;
 
 namespace Microsoft.Azure.Commands.Resources
 {
     /// <summary>
-    /// Filters role assignments
+    /// Gets all principals having access to the subscription
     /// </summary>
-    [Cmdlet(VerbsCommon.Get, "AzureAccessAssignments"), OutputType(typeof(List<PSAccessAssignment>))]
+    [Cmdlet(VerbsCommon.Get, "AzureAccessAssignments", DefaultParameterSetName = ParameterSet.Empty), OutputType(typeof(List<PSAccessAssignment>))]
     public class GetAzureAccessAssignmentsCommand : ResourcesBaseCmdlet
     {
-        [Parameter(Mandatory = false, ValueFromPipelineByPropertyName = true, HelpMessage = "The principal UPN or Display Name or Email.")]
+        [Parameter(Mandatory = true, ValueFromPipelineByPropertyName = true, ParameterSetName = ParameterSet.UPN, HelpMessage = "The user UPN or email.")]
         [ValidateNotNullOrEmpty]
-        public string PrincipalDisplayNameOrUpnOrEmail { get; set; }
+        public string UserUpnOrEmail { get; set; }
+
+        [Parameter(Mandatory = true, ValueFromPipelineByPropertyName = true, ParameterSetName = ParameterSet.Mail, HelpMessage = "The group display name.")]
+        [ValidateNotNullOrEmpty]
+        public string GroupDisplayName { get; set; }
+
+        [Parameter(Mandatory = true, ValueFromPipelineByPropertyName = true, ParameterSetName = ParameterSet.SPN, HelpMessage = "The service principal display name.")]
+        [ValidateNotNullOrEmpty]
+        public string ServicePrincipalDisplayName { get; set; }
 
         public override void ExecuteCmdlet()
         {
-            WriteObject(PoliciesClient.GetAccessAssignments(PrincipalDisplayNameOrUpnOrEmail, Profile.Context.Subscription.Name), true);
+            PrincipalType principalType = PrincipalType.None;
+            ADObjectFilterOptions options = new ADObjectFilterOptions();
+
+            if (!string.IsNullOrWhiteSpace(UserUpnOrEmail))
+            {
+                options.UPN = UserUpnOrEmail;
+                options.Mail = UserUpnOrEmail;
+                principalType = PrincipalType.User;
+            }
+            else if (!string.IsNullOrWhiteSpace(GroupDisplayName))
+            {
+                options.SearchString = GroupDisplayName;
+                principalType = PrincipalType.Group;
+            }
+            if (!string.IsNullOrWhiteSpace(ServicePrincipalDisplayName))
+            {
+                options.SearchString = ServicePrincipalDisplayName;
+                principalType = PrincipalType.ServicePrincipal;
+            }
+
+            WriteObject(PoliciesClient.GetAccessAssignments(options, principalType, Profile.Context.Subscription.Name), true);
         }
     }
 }

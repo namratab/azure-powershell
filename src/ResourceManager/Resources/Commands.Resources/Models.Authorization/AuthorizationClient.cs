@@ -191,60 +191,58 @@ namespace Microsoft.Azure.Commands.Resources.Models.Authorization
         }
 
         /// <summary>
-        /// Deletes a role assignments based on the used options.
+        /// Get all access assignments for the subscription, indicating who all has access to the subscription
         /// </summary>
-        /// <param name="principalDisplayNameOrUpnOrEmail">The role assignment filtering options</param>
+        /// <param name="options">Filter options for principal</param>
+        /// <param name="principalType">The principal type</param>
         /// <param name="currentSubscriptionName">The current subscription name</param>
-        /// <returns>The deleted role assignments</returns>
-        public List<PSAccessAssignment> GetAccessAssignments(string principalDisplayNameOrUpnOrEmail, string currentSubscriptionName)
+        /// <returns>The access assignments</returns>
+        public List<PSAccessAssignment> GetAccessAssignments(ADObjectFilterOptions options, PrincipalType principalType, string currentSubscriptionName)
         {
+            bool filterByPrincipal = false;
+            string principalUpnOrDisplayName = String.Empty;
+            List<Guid> principalObjectIdAndGroupObjectIds = new List<Guid>();
             string currentSubscriptionId = AuthorizationManagementClient.Credentials.SubscriptionId;
-
-            // Get all access-assignments for subscription
-            ListAssignmentsFilterParameters parameters = new ListAssignmentsFilterParameters();
-            List<PSRoleAssignment> roleAssignmentsForSubscription = AuthorizationManagementClient.RoleAssignments.List(parameters)
-                .RoleAssignments.Select(r => r.ToPSRoleAssignment(this, ActiveDirectoryClient)).ToList();
-            List<PSAccessAssignment> accessAssignmentsForSubscription = roleAssignmentsForSubscription.Select(ra => ra.ToPsAccessAssignment(this, ActiveDirectoryClient, currentSubscriptionName)).ToList();
             
+            // Allows for early return if Principal is not found
+            if (principalType != PrincipalType.None)
+            {
+                principalObjectIdAndGroupObjectIds = GetPrincipalAndGroups(options, principalType, out principalUpnOrDisplayName);
+                filterByPrincipal = true;
+            }
+            
+            // Get all role-assignments for subscription
+            ListAssignmentsFilterParameters parameters = new ListAssignmentsFilterParameters();
+            List<RoleAssignment> roleAssignmentsForSubscription = AuthorizationManagementClient.RoleAssignments.List(parameters).RoleAssignments.ToList();
+
+            // Pre-fetch all roledefinitions to avoid 'n' calls to ARM to resolve the RoleDefinition for each of the 'n' role assignments
+            List<RoleDefinition> allRoleDefinitions = AuthorizationManagementClient.RoleDefinitions.List().RoleDefinitions.ToList();
+
+            // Make a single call to Graph to resolve all the Principal Ids that are referenced in each of the role assignments, instead of 1 call per assignment
+            List<string> allPrincipalIdsInRoleAssignments = roleAssignmentsForSubscription.Select(ra => ra.Properties.PrincipalId.ToString()).Distinct().ToList();
+
+            List<PSADObject> allPrincipalObjectsInRoleAssignments = ActiveDirectoryClient.GetObjectsByObjectIds(allPrincipalIdsInRoleAssignments, null /* null indicating search all entity types */);
+
+            // Convert to Access-Assignments
+            List<PSAccessAssignment> accessAssignmentsForSubscription = roleAssignmentsForSubscription.Select(ra => ra.ToPsAccessAssignment(allRoleDefinitions, allPrincipalObjectsInRoleAssignments, currentSubscriptionName)).ToList();
+
             // Get classic administrator access assignments
             List<ClassicAdministrator> classicAdministrators = AuthorizationManagementClient.ClassicAdministrators.List().ClassicAdministrators.ToList();
             List<PSAccessAssignment> classicAdministratorsAccessAssignments = classicAdministrators.Select(a => a.ToPsAccessAssignment(ActiveDirectoryClient, currentSubscriptionName, currentSubscriptionId)).ToList();
 
-            // concat both sets
+            // Concat both sets  - roleassignments and classic admin assignments
             accessAssignmentsForSubscription.AddRange(classicAdministratorsAccessAssignments);
 
-            // Filter
-            if (!string.IsNullOrWhiteSpace(principalDisplayNameOrUpnOrEmail))
+            // Filter if valid principal was specified
+            List<PSAccessAssignment> filteredAccessAssignments = null;
+            if (filterByPrincipal)
             {
-                PSADObject principal = ActiveDirectoryClient.GetADObject(new ADObjectFilterOptions
-                {
-                    UPN = principalDisplayNameOrUpnOrEmail,
-                    SPN = principalDisplayNameOrUpnOrEmail,
-                    Mail = principalDisplayNameOrUpnOrEmail
-                });
- 
-                List<Guid> principalObjectIdAndGroupObjectIds = new List<Guid>();
-                
-                // Add the current principal id to the list
-                principalObjectIdAndGroupObjectIds.Add(principal.Id);
-
-                // Get transitive-group membership of the principal
-                List<PSADObject> principalGroupMembership = new List<PSADObject>();
-
-                if (principal is PSADUser)
-                {
-                    principalGroupMembership.AddRange(ActiveDirectoryClient.ListUserGroups(((PSADUser) principal).UserPrincipalName));
-                }
-                else if (principal is PSADGroup)
-                {
-                    principalGroupMembership.AddRange(ActiveDirectoryClient.ListGroupsForGroupPrincipal(((PSADGroup) principal).Mail));
-                }
-                //TODO: For service principals
-
-                principalObjectIdAndGroupObjectIds.AddRange(principalGroupMembership.Select(g => g.Id));
+                filteredAccessAssignments = accessAssignmentsForSubscription.Where(psAccessAssignment => 
+                    (!string.IsNullOrWhiteSpace(psAccessAssignment.SubjectId) && principalObjectIdAndGroupObjectIds.Contains(Guid.Parse(psAccessAssignment.SubjectId))) 
+                 || (!string.IsNullOrWhiteSpace(psAccessAssignment.SubjectName) && principalUpnOrDisplayName.ToLower().Equals(psAccessAssignment.SubjectName.ToLower()))).ToList();
             }
 
-            return accessAssignmentsForSubscription;
+            return filterByPrincipal ? filteredAccessAssignments : accessAssignmentsForSubscription;
         }
 
         public PSRoleDefinition GetRoleRoleDefinition(string name)
@@ -394,6 +392,95 @@ namespace Microsoft.Azure.Commands.Resources.Models.Authorization
             {
                 throw new ArgumentException(ProjectResources.InvalidActions);
             }
+        }
+
+        private List<Guid> GetPrincipalAndGroups(ADObjectFilterOptions options, PrincipalType principalType, out string principalUpnOrDisplayName)
+        {
+            PSADObject principalObject;
+            List<Guid> principalObjectIdAndGroupObjectIds = new List<Guid>();
+
+            List<string> principalGroupMembership;
+
+            switch (principalType)
+            {
+                case PrincipalType.User:
+                    principalObject = GetUserPrincipalAndGroups(options, out principalGroupMembership, out principalUpnOrDisplayName);
+                    break;
+                case PrincipalType.Group:
+                    principalObject = GetGroupPrincipalAndGroups(options, out principalGroupMembership, out principalUpnOrDisplayName);
+                    break;
+                case PrincipalType.ServicePrincipal:
+                    principalObject = GetServicePrincipalAndGroups(options, out principalGroupMembership, out principalUpnOrDisplayName);
+                    break;
+                default:
+                    throw new InvalidOperationException(string.Format("Unsupported principal type {0}", principalType));
+            }
+
+            // Principal found - Add the principal object id to the list
+            principalObjectIdAndGroupObjectIds.Add(principalObject.Id);
+            // Add its groups too
+            principalObjectIdAndGroupObjectIds.AddRange(principalGroupMembership.Select(g =>
+            {
+                Guid groupId;
+                return Guid.TryParse(g, out groupId) ? groupId : Guid.Empty;
+            }));
+
+            return principalObjectIdAndGroupObjectIds;
+        }
+
+
+        private PSADObject GetUserPrincipalAndGroups(ADObjectFilterOptions options, out List<string> userPrincipalGroupMembership, out string principalUpnOrDisplayName)
+        {
+            userPrincipalGroupMembership = new List<string>();
+            PSADObject userPrincipalObject = ActiveDirectoryClient.FilterUsers(options).FirstOrDefault();
+
+            if (userPrincipalObject != null)
+            {
+                userPrincipalGroupMembership.AddRange(ActiveDirectoryClient.ListSecurityGroupsIdsForUserPrincipal(((PSADUser)userPrincipalObject).Id));
+                principalUpnOrDisplayName = ((PSADUser)userPrincipalObject).UserPrincipalName;
+            }
+            else
+            {
+                throw new KeyNotFoundException("User Principal not found in tenant");
+            }
+
+            return userPrincipalObject;
+        }
+
+        private PSADObject GetGroupPrincipalAndGroups(ADObjectFilterOptions options, out List<string> groupPrincipalGroupMembership, out string principalUpnOrDisplayName)
+        {
+            groupPrincipalGroupMembership = new List<string>();
+            PSADObject groupPrincipalObject = ActiveDirectoryClient.FilterGroups(options).FirstOrDefault();
+
+            if (groupPrincipalObject != null)
+            {
+                groupPrincipalGroupMembership.AddRange(ActiveDirectoryClient.ListSecurityGroupIdsForGroupPrincipal(((PSADGroup)groupPrincipalObject).Id));
+                principalUpnOrDisplayName = ((PSADGroup)groupPrincipalObject).DisplayName;
+            }
+            else
+            {
+                throw new KeyNotFoundException("Group Principal not found in tenant");
+            }
+
+            return groupPrincipalObject;
+        }
+
+        private PSADObject GetServicePrincipalAndGroups(ADObjectFilterOptions options, out List<string> servicePrincipalGroupMembership, out string principalUpnOrDisplayName)
+        {
+            servicePrincipalGroupMembership = new List<string>();
+            PSADObject servicePrincipalObject = ActiveDirectoryClient.FilterServicePrincipals(options).FirstOrDefault();
+
+            if (servicePrincipalObject != null)
+            {
+                servicePrincipalGroupMembership.AddRange(ActiveDirectoryClient.ListSecurityGroupIdsForServicePrincipal(((PSADServicePrincipal)servicePrincipalObject).Id));
+                principalUpnOrDisplayName = ((PSADServicePrincipal)servicePrincipalObject).DisplayName;
+            }
+            else
+            {
+                throw new KeyNotFoundException("Service Principal not found in tenant");
+            }
+
+            return servicePrincipalObject;
         }
     }
 }
